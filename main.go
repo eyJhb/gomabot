@@ -10,9 +10,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 
+	"github.com/eyJhb/gomabot/gomabot"
 	gobot "github.com/eyJhb/gomabot/gomabot"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
@@ -40,8 +42,7 @@ type config struct {
 
 	StateDir string
 
-	// Handlers []ConfigCommandHandler
-	Handlers map[string]string
+	ScriptHandlers map[string]string
 }
 
 func main() {
@@ -90,15 +91,8 @@ func run(conf config) error {
 		Password: conf.Password,
 
 		Database: fmt.Sprintf("%s/%s", conf.StateDir, "mautrix-database.db"),
-	}
 
-	// add handlers
-	for handlerPattern, handlerScript := range conf.Handlers {
-		botOpts.Handlers = append(botOpts.Handlers, gobot.CommandHandler{
-			Pattern:         *regexp.MustCompile(fmt.Sprintf("^%s", handlerPattern)),
-			Handler:         HandlerScript(handlerScript),
-			OriginalPattern: handlerPattern,
-		})
+		Handlers: prepareScriptHandlers(conf.ScriptHandlers),
 	}
 
 	bot, err := gobot.NewMatrixBot(ctx, botOpts)
@@ -123,7 +117,32 @@ func run(conf config) error {
 	return nil
 }
 
-func HandlerScript(script string) func(ctx context.Context, sender id.UserID, room id.RoomID, message string) (string, error) {
+func prepareScriptHandlers(scriptHandlers map[string]string) []gomabot.CommandHandler {
+	//  put into a tempoarary slice
+	var scriptPatterns []string
+	for scriptPattern := range scriptHandlers {
+		scriptPatterns = append(scriptPatterns, scriptPattern)
+
+	}
+
+	sort.Slice(scriptPatterns, func(i, j int) bool { return len(scriptPatterns[i]) > len(scriptPatterns[j]) })
+
+	// convert scripthandlers to handlers
+	var handlers []gomabot.CommandHandler
+	for _, scriptPattern := range scriptPatterns {
+		scriptPath := scriptHandlers[scriptPattern]
+
+		handlers = append(handlers, gobot.CommandHandler{
+			Pattern: *regexp.MustCompile(scriptPattern),
+			Handler: HandlerScript(scriptPath),
+		})
+	}
+
+	// sorted handlers by longest pattern
+	return handlers
+}
+
+func HandlerScript(script string) gomabot.CommandHandlerFunc {
 	type scriptArgs struct {
 		SenderID string
 		RoomID   string

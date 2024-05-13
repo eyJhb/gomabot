@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"regexp"
-	"sort"
 	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -24,15 +23,12 @@ type MatrixBot struct {
 	ctxCancelFunc context.CancelFunc
 }
 
-// type CommandHandlerFunc func(ctx context.Context, sender id.UserID, room id.RoomID, message string) (string, error)
-type CommandHandlerFunc func(ctx context.Context, client *mautrix.Client, message event.MessageEventContent) error
+type CommandHandlerFunc func(ctx context.Context, sender id.UserID, room id.RoomID, message string) (string, error)
 
 type CommandHandler struct {
-	Pattern         regexp.Regexp
-	OriginalPattern string
-	// MinPower int
-	// Handler func(sender, room, message string) error
-	Handler func(ctx context.Context, sender id.UserID, room id.RoomID, message string) (string, error)
+	Pattern regexp.Regexp
+
+	Handler CommandHandlerFunc
 }
 
 type MatrixBotOpts struct {
@@ -52,7 +48,7 @@ type MatrixBotOpts struct {
 	Database  string
 	PickleKey []byte
 
-	// Handlers
+	// handlers
 	Handlers []CommandHandler
 }
 
@@ -90,7 +86,6 @@ func NewMatrixBot(ctx context.Context, opts MatrixBotOpts) (MatrixBot, error) {
 		}
 	}
 	// If you want to use multiple clients with the same DB, you should set a distinct database account ID for each one.
-	//cryptoHelper.DBAccountID = ""
 	err = cryptoHelper.Init(ctx)
 	if err != nil {
 		return MatrixBot{}, err
@@ -98,9 +93,6 @@ func NewMatrixBot(ctx context.Context, opts MatrixBotOpts) (MatrixBot, error) {
 
 	// Set the client crypto helper in order to automatically encrypt outgoing messages
 	client.Crypto = cryptoHelper
-
-	// sort handlers
-	sort.Slice(mb.Handlers, func(i, j int) bool { return len(mb.Handlers[i].OriginalPattern) > len(mb.Handlers[j].OriginalPattern) })
 
 	return mb, nil
 }
