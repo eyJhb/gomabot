@@ -3,6 +3,7 @@ package gomabot
 import (
 	"context"
 	"fmt"
+	"html"
 	"regexp"
 	"strings"
 
@@ -17,29 +18,36 @@ var (
 
 func (mb *MatrixBot) OnEventStateMember(ctx context.Context, evt *event.Event) {
 	if evt.GetStateKey() == mb.Client.UserID.String() && evt.Content.AsMember().Membership == event.MembershipInvite {
-		_, err := mb.Client.JoinRoomByID(ctx, evt.RoomID)
-		if err != nil {
-			log.Error().Err(err).
-				Str("room_id", evt.RoomID.String()).
-				Str("inviter", evt.Sender.String()).
-				Msg("Failed to join room after invite")
-			return
+		var err error
+		if mb.RoomjoinHandler != nil {
+			_, err = mb.RoomjoinHandler(ctx, evt.Sender, evt.RoomID, "")
 		}
 
 		log.Info().
 			Str("room_id", evt.RoomID.String()).
 			Str("inviter", evt.Sender.String()).
-			Msg("Joined room after invite")
+			Errs("room_join_handler", []error{err}).
+			Msg("room join invite")
+
+		if err == nil {
+			_, err := mb.Client.JoinRoomByID(ctx, evt.RoomID)
+			if err != nil {
+				log.Error().Err(err).
+					Str("room_id", evt.RoomID.String()).
+					Str("inviter", evt.Sender.String()).
+					Msg("Failed to join room after invite")
+				return
+			}
+
+			log.Info().
+				Str("room_id", evt.RoomID.String()).
+				Str("inviter", evt.Sender.String()).
+				Msg("Joined room after invite")
+		}
 	}
 }
 
 func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
-	err := mb.Client.MarkRead(ctx, evt.RoomID, evt.ID)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to mark message as read")
-
-	}
-
 	log.Info().
 		Str("sender", evt.Sender.String()).
 		Str("type", evt.Type.String()).
@@ -60,10 +68,17 @@ func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
 			msg = messageEventContent.FormattedBody
 
 		}
-		msg = strings.TrimSpace(msg)
 
+		msg = strings.TrimSpace(msg)
 		if !handler.Pattern.MatchString(msg) {
 			continue
+		}
+
+		// mark as read if it matches a handler
+		err := mb.Client.MarkRead(ctx, evt.RoomID, evt.ID)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to mark message as read")
+
 		}
 
 		go func(ctx context.Context, senderID id.UserID, roomID id.RoomID, msg string) {
@@ -97,11 +112,10 @@ func (mb *MatrixBot) sendMessage(ctx context.Context, senderID id.UserID, roomID
 
 		for i := len(matchIndexes) - 1; i >= 0; i-- {
 			idxs := matchIndexes[i]
-			fmt.Println("at index", idxs)
 
 			textBefore := htmlMsg[:idxs[0]]
 			textAfter := htmlMsg[idxs[1]:]
-			codeblock := strings.ReplaceAll(htmlMsg[idxs[4]:idxs[5]], "\n", "||NEWLINE||")
+			codeblock := strings.ReplaceAll(html.EscapeString(htmlMsg[idxs[4]:idxs[5]]), "\n", "||NEWLINE||")
 
 			var codeClass string
 			if idxs[2] != -1 {

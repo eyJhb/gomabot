@@ -17,7 +17,7 @@ import (
 	"github.com/eyJhb/gomabot/gomabot"
 	gobot "github.com/eyJhb/gomabot/gomabot"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -29,20 +29,21 @@ type ConfigCommandHandler struct {
 }
 
 type config struct {
-	Homeserver string
-	PickleKey  string
+	Homeserver string `yaml:"Homeserver"`
+	PickleKey  string `yaml:"PickleKey"`
 
 	// Authentication UserID + AccessToken
-	UserID      string
-	AccessToken string
+	UserID      string `yaml:"UserID"`
+	AccessToken string `yaml:"AccessToken"`
 
 	// Authentication Username + Password
-	Username string
-	Password string
+	Username string `yaml:"Username"`
+	Password string `yaml:"Password"`
 
-	StateDir string
+	StateDir string `yaml:"StateDir"`
 
-	ScriptHandlers map[string]string
+	ScriptHandlers    map[string]string `yaml:"ScriptHandlers"`
+	ScriptJoinHandler string            `yaml:"ScriptJoinHandler"`
 }
 
 func main() {
@@ -52,29 +53,39 @@ func main() {
 		os.Exit(1)
 	}
 
-	v := viper.NewWithOptions(viper.KeyDelimiter("::"))
-
-	// set default shit, otherwise env won't work
-	v.SetDefault("password", "")
-	v.SetDefault("picklekey", "")
-
-	v.SetConfigFile(*config_path)
-	v.SetEnvPrefix("MATRIX_BOT")
-	v.AutomaticEnv()
-	err := v.ReadInConfig()
+	configBytes, err := os.ReadFile(*config_path)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to read config into struct")
-		return
+		panic(err)
 	}
 
 	var conf config
-	err = v.Unmarshal(&conf)
+	err = yaml.Unmarshal(configBytes, &conf)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to decode config into struct")
-		return
+		panic(err)
 	}
 
-	fmt.Println(run(conf))
+	ENV_PREFIX := "MATRIX_BOT_"
+	if v := os.Getenv(fmt.Sprintf("%s%s", ENV_PREFIX, "PICKLEKEY")); v != "" {
+		conf.PickleKey = v
+	}
+	if v := os.Getenv(fmt.Sprintf("%s%s", ENV_PREFIX, "USERNAME")); v != "" {
+		conf.Username = v
+	}
+	if v := os.Getenv(fmt.Sprintf("%s%s", ENV_PREFIX, "PASSWORD")); v != "" {
+		conf.Password = v
+	}
+	if v := os.Getenv(fmt.Sprintf("%s%s", ENV_PREFIX, "USERID")); v != "" {
+		conf.UserID = v
+	}
+	if v := os.Getenv(fmt.Sprintf("%s%s", ENV_PREFIX, "ACCESSTOKEN")); v != "" {
+		conf.AccessToken = v
+	}
+
+	err = run(conf)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to run bot")
+		os.Exit(1)
+	}
 }
 
 func run(conf config) error {
@@ -93,6 +104,10 @@ func run(conf config) error {
 		Database: fmt.Sprintf("%s/%s", conf.StateDir, "mautrix-database.db"),
 
 		Handlers: prepareScriptHandlers(conf.ScriptHandlers),
+	}
+
+	if conf.ScriptJoinHandler != "" {
+		botOpts.RoomjoinHandler = HandlerScript(conf.ScriptJoinHandler)
 	}
 
 	bot, err := gobot.NewMatrixBot(ctx, botOpts)

@@ -16,7 +16,8 @@ import (
 type MatrixBot struct {
 	Client *mautrix.Client
 
-	Handlers []CommandHandler
+	Handlers        []CommandHandler
+	RoomjoinHandler CommandHandlerFunc
 
 	cryptoHelper  *cryptohelper.CryptoHelper
 	waitGroup     *sync.WaitGroup
@@ -50,6 +51,8 @@ type MatrixBotOpts struct {
 
 	// handlers
 	Handlers []CommandHandler
+
+	RoomjoinHandler CommandHandlerFunc
 }
 
 func NewMatrixBot(ctx context.Context, opts MatrixBotOpts) (MatrixBot, error) {
@@ -60,8 +63,9 @@ func NewMatrixBot(ctx context.Context, opts MatrixBotOpts) (MatrixBot, error) {
 
 	var wg sync.WaitGroup
 	mb := MatrixBot{
-		waitGroup: &wg,
-		Handlers:  opts.Handlers,
+		waitGroup:       &wg,
+		Handlers:        opts.Handlers,
+		RoomjoinHandler: opts.RoomjoinHandler,
 	}
 
 	client, err := mautrix.NewClient(opts.Homeserver, opts.UserID, opts.AccessToken)
