@@ -24,7 +24,7 @@ type MatrixBot struct {
 	ctxCancelFunc context.CancelFunc
 }
 
-type CommandHandlerFunc func(ctx context.Context, sender id.UserID, room id.RoomID, message string) (string, error)
+type CommandHandlerFunc func(ctx context.Context, client *mautrix.Client, evt *event.Event) error
 
 type CommandHandler struct {
 	Pattern regexp.Regexp

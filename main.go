@@ -1,21 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
-	"regexp"
-	"sort"
-	"strings"
 	"syscall"
 
-	"github.com/eyJhb/gomabot/gomabot"
 	gobot "github.com/eyJhb/gomabot/gomabot"
+	"github.com/eyJhb/gomabot/nixbot"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 	"maunium.net/go/mautrix/id"
@@ -102,18 +96,18 @@ func run(conf config) error {
 		Password: conf.Password,
 
 		Database: fmt.Sprintf("%s/%s", conf.StateDir, "mautrix-database.db"),
-
-		Handlers: prepareScriptHandlers(conf.ScriptHandlers),
-	}
-
-	if conf.ScriptJoinHandler != "" {
-		botOpts.RoomjoinHandler = HandlerScript(conf.ScriptJoinHandler)
 	}
 
 	bot, err := gobot.NewMatrixBot(ctx, botOpts)
 	if err != nil {
 		return err
 	}
+
+	nbot := nixbot.NixBot{
+		Bot: &bot,
+	}
+
+	nbot.Run(ctx)
 
 	// start bot
 	bot.Start(ctx)
@@ -130,81 +124,4 @@ func run(conf config) error {
 	}
 
 	return nil
-}
-
-func prepareScriptHandlers(scriptHandlers map[string]string) []gomabot.CommandHandler {
-	//  put into a tempoarary slice
-	var scriptPatterns []string
-	for scriptPattern := range scriptHandlers {
-		scriptPatterns = append(scriptPatterns, scriptPattern)
-
-	}
-
-	sort.Slice(scriptPatterns, func(i, j int) bool { return len(scriptPatterns[i]) > len(scriptPatterns[j]) })
-
-	// convert scripthandlers to handlers
-	var handlers []gomabot.CommandHandler
-	for _, scriptPattern := range scriptPatterns {
-		scriptPath := scriptHandlers[scriptPattern]
-
-		handlers = append(handlers, gobot.CommandHandler{
-			Pattern: *regexp.MustCompile(scriptPattern),
-			Handler: HandlerScript(scriptPath),
-		})
-	}
-
-	// sorted handlers by longest pattern
-	return handlers
-}
-
-func HandlerScript(script string) gomabot.CommandHandlerFunc {
-	type scriptArgs struct {
-		SenderID string
-		RoomID   string
-		Message  string
-	}
-
-	return func(ctx context.Context, sender id.UserID, room id.RoomID, message string) (string, error) {
-		// marshal
-		jsonScriptArgs, err := json.Marshal(scriptArgs{SenderID: string(sender), RoomID: room.String(), Message: message})
-		if err != nil {
-			return "", err
-		}
-
-		cmd := exec.CommandContext(ctx, script, string(jsonScriptArgs))
-
-		// stderr
-		var outb, errb bytes.Buffer
-		cmd.Stderr = &errb
-		cmd.Stdout = &outb
-
-		// setup env
-		env := os.Environ()
-		env = append(env, fmt.Sprintf("USERID=%s", string(sender)))
-		env = append(env, fmt.Sprintf("ROOMID=%s", string(room)))
-		env = append(env, fmt.Sprintf("MESSAGE=%s", string(message)))
-
-		message_split := strings.SplitN(message, " ", 2)
-
-		if len(message_split) > 1 {
-			env = append(env, fmt.Sprintf("MESSAGE_STRIP=%s", message_split[1]))
-		} else {
-			env = append(env, "MESSAGE_STRIP=")
-		}
-
-		cmd.Env = env
-
-		// execute command
-		err = cmd.Run()
-		if err != nil {
-			log.Error().Str("stdout", outb.String()).Str("stderr", errb.String()).Msg("failed to run command")
-			return "", err
-		}
-
-		return outb.String(), nil
-	}
-}
-
-func HandlerTest(sender id.UserID, room id.RoomID, message string) (string, error) {
-	return "This is a response!!", nil
 }
