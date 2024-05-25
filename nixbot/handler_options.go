@@ -11,8 +11,10 @@ import (
 	"regexp"
 	"sort"
 	"text/template"
+	"time"
 
 	"github.com/hbollon/go-edlib"
+	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 )
@@ -39,9 +41,13 @@ type NixOptionName struct {
 }
 
 func (nb *NixBot) FetchNixOptions(ctx context.Context) (map[string]NixOption, error) {
+	if nb.NixOptions != nil && time.Now().Sub(nb.NixOptionLastUpdated) < 30*time.Minute && !nb.NixOptionLastUpdated.IsZero() {
+		return nb.NixOptions, nil
+	}
+
 	cmd := exec.CommandContext(ctx,
 		"nix", "build",
-		"-I nixpkgs=channel:nixos-unstable",
+		"-I", "nixpkgs=channel:nixos-unstable",
 		"--impure",
 		"--no-allow-import-from-derivation",
 		"--restrict-eval",
@@ -63,7 +69,8 @@ func (nb *NixBot) FetchNixOptions(ctx context.Context) (map[string]NixOption, er
 
 	err := cmd.Run()
 	if err != nil {
-		return nil, errors.New(stderr.String())
+		log.Error().Str("stdout", stdout.String()).Str("stderr", stderr.String()).Msg("failed to run command")
+		return nil, err
 	}
 
 	type NixBuildResult []struct {
@@ -95,6 +102,9 @@ func (nb *NixBot) FetchNixOptions(ctx context.Context) (map[string]NixOption, er
 	if err != nil {
 		return nil, err
 	}
+
+	nb.NixOptions = nixOptions
+	nb.NixOptionLastUpdated = time.Now()
 
 	return nixOptions, nil
 }

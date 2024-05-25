@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"os/exec"
 	"sort"
 	"text/template"
 
 	"github.com/hbollon/go-edlib"
+	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 )
@@ -35,7 +35,7 @@ func (nb *NixBot) CommandHandlerSearchPackages(ctx context.Context, client *maut
 
 	cmd := exec.CommandContext(ctx,
 		"nix", "search",
-		"-I nixpkgs=channel:nixos-unstable",
+		"-I", "nixpkgs=channel:nixos-unstable",
 		"--json",
 		"nixpkgs",
 		search,
@@ -47,7 +47,8 @@ func (nb *NixBot) CommandHandlerSearchPackages(ctx context.Context, client *maut
 
 	err := cmd.Run()
 	if err != nil {
-		return errors.New(stderr.String())
+		log.Error().Str("stdout", stdout.String()).Str("stderr", stderr.String()).Msg("failed to run command")
+		return nil
 	}
 
 	packagesMap := make(map[string]Package)

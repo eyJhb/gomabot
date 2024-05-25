@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/eyJhb/gomabot/gomabot"
 	"github.com/rs/zerolog/log"
@@ -28,9 +29,14 @@ import (
 type NixBot struct {
 	Bot *gomabot.MatrixBot
 
+	// repl
 	ReplFilePath  string
 	ReplFileLock  sync.RWMutex
 	ReplVariables map[string]string
+
+	// options
+	NixOptions           map[string]NixOption
+	NixOptionLastUpdated time.Time
 
 	md goldmark.Markdown
 }

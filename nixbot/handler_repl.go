@@ -75,7 +75,7 @@ func (nb *NixBot) CommandHandlerRepl(ctx context.Context, client *mautrix.Client
 
 	// setup cmd args
 	cmd_args := []string{
-		"-I nixpkgs=channel:nixos-unstable",
+		"-I", "nixpkgs=channel:nixos-unstable",
 		// basic limiting options
 		"--option", "cores", "0",
 		"--option", "fsync-metadata", "false",
@@ -145,8 +145,8 @@ func (nb *NixBot) NixReplGenerateExpr(expr string) (string, error) {
 
 	final_nix_variables := map[string]string{}
 
-	maps.Copy(final_nix_variables, nb.ReplVariables)
 	maps.Copy(final_nix_variables, default_overrideable_nix_variables)
+	maps.Copy(final_nix_variables, nb.ReplVariables)
 	maps.Copy(final_nix_variables, default_nix_variables)
 
 	// because of @rasmus:rend.al, you know what you did
