@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	gobot "github.com/eyJhb/gomabot/gomabot"
 	"github.com/eyJhb/gomabot/nixbot"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -33,6 +37,9 @@ type config struct {
 	// Authentication Username + Password
 	Username string `yaml:"Username"`
 	Password string `yaml:"Password"`
+
+	// admins
+	Admins []string `yaml:"Admins"`
 
 	StateDir string `yaml:"StateDir"`
 
@@ -74,6 +81,9 @@ func main() {
 	if v := os.Getenv(fmt.Sprintf("%s%s", ENV_PREFIX, "ACCESSTOKEN")); v != "" {
 		conf.AccessToken = v
 	}
+	if v := os.Getenv(fmt.Sprintf("%s%s", ENV_PREFIX, "ADMINS")); v != "" {
+		conf.Admins = strings.Split(v, ",")
+	}
 
 	err = run(conf)
 	if err != nil {
@@ -96,6 +106,21 @@ func run(conf config) error {
 		Password: conf.Password,
 
 		Database: fmt.Sprintf("%s/%s", conf.StateDir, "mautrix-database.db"),
+
+		RoomjoinHandler: func(ctx context.Context, client *mautrix.Client, evt *event.Event) error {
+			var isAdmin bool
+			for _, admin := range conf.Admins {
+				if admin == evt.Sender.String() {
+					isAdmin = true
+				}
+			}
+
+			if isAdmin {
+				return nil
+			}
+
+			return errors.New("not admin")
+		},
 	}
 
 	bot, err := gobot.NewMatrixBot(ctx, botOpts)
@@ -104,7 +129,8 @@ func run(conf config) error {
 	}
 
 	nbot := nixbot.NixBot{
-		Bot: &bot,
+		Bot:          &bot,
+		ReplFilePath: fmt.Sprintf("%s/nixrepl.json", conf.StateDir),
 	}
 
 	nbot.Run(ctx)
