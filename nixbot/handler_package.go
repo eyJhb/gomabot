@@ -33,7 +33,7 @@ func (nb *NixBot) CommandHandlerSearchPackages(ctx context.Context, client *maut
 	vars := nb.vars(ctx)
 	search := vars["search"]
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(ctx,
 		"nix", "search",
 		"-I nixpkgs=channel:nixos-unstable",
 		"--json",

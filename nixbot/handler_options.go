@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"os"
 	"os/exec"
 	"regexp"
@@ -38,7 +39,7 @@ type NixOptionName struct {
 }
 
 func (nb *NixBot) FetchNixOptions(ctx context.Context) (map[string]NixOption, error) {
-	cmd := exec.Command(
+	cmd := exec.CommandContext(ctx,
 		"nix", "build",
 		"-I nixpkgs=channel:nixos-unstable",
 		"--impure",
@@ -125,7 +126,7 @@ func (nb *NixBot) CommandHandlerSearchOptions(ctx context.Context, client *mautr
 
 	tmplText := `
 {{- range $v := .}}
-- [{{$v.Name}}](https://search.nixos.org/options?channel=unstable&query={{$v.Name}})
+- [{{html $v.Name}}](https://search.nixos.org/options?channel=unstable&query={{$v.Name}})
 {{- end -}}
 		`
 	tmpl, err := template.New("nixoptions").Parse(tmplText)
@@ -173,7 +174,7 @@ func (nb *NixBot) CommandHandlerSearchOption(ctx context.Context, client *mautri
 	}
 
 	tmplText := `
-**Name**: {{.Name}}
+**Name**: {{html .Name}}
 
 **Description**: {{.NixOption.Description}}
 
@@ -204,5 +205,5 @@ func (nb *NixBot) CommandHandlerSearchOption(ctx context.Context, client *mautri
 		return err
 	}
 
-	return nb.MakeMarkdownReplySummary(ctx, client, evt, buf.Bytes(), res)
+	return nb.MakeMarkdownReplySummary(ctx, client, evt, buf.Bytes(), html.EscapeString(res))
 }

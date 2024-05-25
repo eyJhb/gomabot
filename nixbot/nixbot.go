@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/eyJhb/gomabot/gomabot"
+	"github.com/rs/zerolog/log"
 	"github.com/yuin/goldmark"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
@@ -26,6 +28,10 @@ import (
 type NixBot struct {
 	Bot *gomabot.MatrixBot
 
+	ReplFilePath  string
+	ReplFileLock  sync.RWMutex
+	ReplVariables map[string]string
+
 	md goldmark.Markdown
 }
 
@@ -35,12 +41,24 @@ func (nb *NixBot) Run(ctx context.Context) {
 	// os.Exit(0)
 	// return
 
+	if err := nb.LoadNixReplFile(); err != nil {
+		log.Panic().Err(err).Msg("unable to load nix repl file")
+	}
+
 	nb.Bot.AddEventHandler("^!ping", nb.CommandHandlerPing)
 	nb.Bot.AddEventHandler("^!echo", nb.CommandHandlerEcho)
 	nb.Bot.AddEventHandler("^!wiki (?P<search>.+)", nb.CommandHandlerSearchWiki)
 	nb.Bot.AddEventHandler("^!options (?P<search>.+)", nb.CommandHandlerSearchOptions)
 	nb.Bot.AddEventHandler("^!option (?P<search>.+)", nb.CommandHandlerSearchOption)
 	nb.Bot.AddEventHandler("^!packages? (?P<search>.+)", nb.CommandHandlerSearchPackages)
+
+	// repl
+	nb.Bot.AddEventHandler("(?ms)^, ?(?P<key>.+)=(?P<expr>.+)", nb.CommandHandlerAddRepl)
+	nb.Bot.AddEventHandler("(?ms)^, ?(?P<key>.+)=", nb.CommandHandlerRemoveRepl)
+	nb.Bot.AddEventHandler("(?ms)^,(?P<strict>:p)?(?P<expr>.+)", nb.CommandHandlerRepl)
+	nb.Bot.AddEventHandler("(?ms)^.*(?P<strict>eval).*```nix(?P<expr>.*)```", nb.CommandHandlerRepl)
+	nb.Bot.AddEventHandler("(?ms)^.*(?P<strict>eval)-?(?P<raw>raw).*```nix(?P<expr>.*)```", nb.CommandHandlerRepl)
+	// nb.Bot.AddEventHandler("(?ms)^.*{?P<strict>eval).*```nix(?P<expr>.*)```", nb.CommandHandlerRepl)
 }
 
 func (nb *NixBot) vars(ctx context.Context) map[string]string {
@@ -50,6 +68,11 @@ func (nb *NixBot) vars(ctx context.Context) map[string]string {
 	}
 
 	return make(map[string]string)
+}
+
+func (nb *NixBot) MakeReply(ctx context.Context, client *mautrix.Client, evt *event.Event, msg []byte) error {
+	_, err := client.SendText(ctx, evt.RoomID, string(msg))
+	return err
 }
 
 func (nb *NixBot) MakeMarkdownReply(ctx context.Context, client *mautrix.Client, evt *event.Event, markdown_raw []byte) error {
