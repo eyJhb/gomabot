@@ -3,6 +3,7 @@ package gomabot
 import (
 	"context"
 	"regexp"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
@@ -52,6 +53,12 @@ func (mb *MatrixBot) OnEventStateMember(ctx context.Context, evt *event.Event) {
 }
 
 func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
+	// ignore own messages
+	if mb.Client.UserID == evt.Sender {
+		return
+	}
+
+	// log messages
 	log.Info().
 		Str("sender", evt.Sender.String()).
 		Str("type", evt.Type.String()).
@@ -59,8 +66,8 @@ func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
 		Str("body", evt.Content.AsMessage().Body).
 		Msg("Received message")
 
-	// ignore own messages
-	if mb.Client.UserID == evt.Sender {
+	// ignore messages older than 1 minute
+	if time.Now().Sub(time.Unix(evt.Timestamp, 0)) > time.Minute {
 		return
 	}
 
