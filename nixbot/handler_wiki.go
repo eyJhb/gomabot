@@ -16,6 +16,14 @@ const (
 	URLNixWiki = "https://wiki.nixos.org"
 )
 
+var (
+	tmplWiki = template.Must(template.New("wiki").Parse(`
+{{- range $v := .Query.Search}}
+- [{{$v.Title}}](https://wiki.nixos.org/wiki/?curid={{$v.Pageid}})
+{{- end -}}
+`))
+)
+
 func (nb *NixBot) CommandHandlerSearchWiki(ctx context.Context, client *mautrix.Client, evt *event.Event) error {
 	vars := nb.vars(ctx)
 
@@ -58,21 +66,15 @@ func (nb *NixBot) CommandHandlerSearchWiki(ctx context.Context, client *mautrix.
 		return err
 	}
 
-	tmplText := `
-{{- range $v := .Query.Search}}
-- [{{$v.Title}}](https://wiki.nixos.org/wiki/?curid={{$v.Pageid}})
-{{- end -}}
-	`
-	tmpl, err := template.New("nixwiki").Parse(tmplText)
-	if err != nil {
-		return err
+	if len(results.Query.Search) == 0 {
+		return nb.SendTextNoResults(ctx, client, evt)
 	}
 
 	var buf bytes.Buffer
-	err = tmpl.Execute(&buf, results)
+	err = tmplWiki.Execute(&buf, results)
 	if err != nil {
 		return err
 	}
 
-	return nb.MakeMarkdownReply(ctx, client, evt, buf.Bytes())
+	return nb.SendMarkdownReply(ctx, client, evt, buf.Bytes())
 }

@@ -21,6 +21,14 @@ func (mb *MatrixBot) AddEventHandler(pattern string, handlerFunc CommandHandlerF
 	})
 }
 
+func (mb *MatrixBot) AddEventHandlerFormattedBody(pattern string, handlerFunc CommandHandlerFunc) {
+	mb.Handlers = append(mb.Handlers, CommandHandler{
+		Pattern:            *regexp.MustCompile(pattern),
+		Handler:            handlerFunc,
+		MatchFormattedBody: true,
+	})
+}
+
 func (mb *MatrixBot) OnEventStateMember(ctx context.Context, evt *event.Event) {
 	if evt.GetStateKey() == mb.Client.UserID.String() && evt.Content.AsMember().Membership == event.MembershipInvite {
 		var err error
@@ -73,7 +81,15 @@ func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
 
 	for _, handler := range mb.Handlers {
 		me := evt.Content.AsMessage()
-		if !handler.Pattern.MatchString(me.Body) {
+
+		body := me.Body
+		if handler.MatchFormattedBody {
+			if handler.Pattern.MatchString(me.FormattedBody) {
+				body = me.FormattedBody
+			}
+		}
+
+		if !handler.Pattern.MatchString(body) {
 			continue
 		}
 
@@ -81,7 +97,7 @@ func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
 		reGroupNames := handler.Pattern.SubexpNames()
 		vars := make(map[string]string)
 		if len(reGroupNames) > 0 {
-			for _, match := range handler.Pattern.FindAllStringSubmatch(me.Body, -1) {
+			for _, match := range handler.Pattern.FindAllStringSubmatch(body, -1) {
 				for groupIdx, group := range match {
 					name := reGroupNames[groupIdx]
 					if name == "" {
@@ -105,6 +121,11 @@ func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
 			err := handler.Handler(ctx, client, evt)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to call command handler")
+
+				if mb.HandlerSendErrors {
+					_, err = mb.Client.SendText(ctx, evt.RoomID, err.Error())
+					log.Error().Err(err).Msg("failed to send error to channel")
+				}
 			}
 		}(ctx, mb.Client, evt)
 

@@ -3,10 +3,8 @@ package nixbot
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
-	"os"
 	"os/exec"
 	"strings"
 	"text/template"
@@ -16,37 +14,56 @@ import (
 	"maunium.net/go/mautrix/event"
 )
 
-func (nb *NixBot) CommandHandlerAddRepl(ctx context.Context, client *mautrix.Client, evt *event.Event) error {
-	vars := nb.vars(ctx)
-	key := strings.TrimSpace(vars["key"])
-	expr := strings.TrimSpace(vars["expr"])
+var (
+	tmplNixReplVariables = template.Must(template.New("packages").Parse(`
+let
+{{- range $k, $v := .Variables }}
+  {{ $k }} = {{ $v }};
+{{- end }}
+in _show ( {{ .Expr }} )
+`))
 
-	if key == "" || expr == "" {
-		nb.MakeReply(ctx, client, evt, []byte("key or expr cannot be empty"))
+	fmtStrNixReplPackage = `let
+  isDerivation = value: value.type or null == "derivation";
+  _show = x: if isDerivation x then "<derivation ${x.drvPath}>" else x; 
+in _show ( (import <nixpkgs> {}).pkgs.callPackage ( %s ) {} )`
+
+	nix_repl_default_overrideable_nix_variables = map[string]string{
+		"_show": "x: if lib.isDerivation x then \"<derivation ${x.drvPath}>\" else x",
 	}
 
-	err := nb.AddNixRepl(key, expr)
+	nix_repl_default_nix_variables = map[string]string{
+		"pkgs": "import <nixpkgs> {}",
+		"lib":  "pkgs.lib",
+	}
+)
+
+func (nb *NixBot) CommandHandlerReplSimple(ctx context.Context, client *mautrix.Client, evt *event.Event) error {
+	vars := nb.vars(ctx)
+	var_key := vars["key"]
+	var_user := vars["user"]
+
+	expr := var_key
+	if var_user != "" {
+		expr = fmt.Sprintf("%s ''[%s](https://matrix.to/#/%s)''", var_key, var_user, var_user)
+
+	}
+
+	finalNixExpr, err := nb.NixReplGenerateExpr(expr)
 	if err != nil {
 		return err
 	}
 
-	return nb.MakeReply(ctx, client, evt, []byte(fmt.Sprintf("Defined %s", key)))
-}
-
-func (nb *NixBot) CommandHandlerRemoveRepl(ctx context.Context, client *mautrix.Client, evt *event.Event) error {
-	vars := nb.vars(ctx)
-	key := strings.TrimSpace(vars["key"])
-
-	if key == "" {
-		nb.MakeReply(ctx, client, evt, []byte("key cannot be empty"))
-	}
-
-	err := nb.RemoveNixRepl(key)
+	stdout, err := nb.NixReplEvaluateExpr(ctx, finalNixExpr, true)
 	if err != nil {
 		return err
 	}
 
-	return nb.MakeReply(ctx, client, evt, []byte(fmt.Sprintf("Undefined %s", key)))
+	if len(stdout) > 2 && stdout[0] == '"' && stdout[len(stdout)-1] == '"' {
+		stdout = stdout[1 : len(stdout)-1]
+	}
+
+	return nb.SendMarkdownReply(ctx, client, evt, []byte(stdout))
 }
 
 func (nb *NixBot) CommandHandlerRepl(ctx context.Context, client *mautrix.Client, evt *event.Event) error {
@@ -64,15 +81,47 @@ func (nb *NixBot) CommandHandlerRepl(ctx context.Context, client *mautrix.Client
 		is_raw = true
 	}
 
+	var is_package bool
+	if vars["package"] != "" {
+		is_package = true
+	}
+
+	// setup expression
 	finalNixExpr := var_expr
 	var err error
-	if !is_raw {
+	if is_package {
+		finalNixExpr = fmt.Sprintf(fmtStrNixReplPackage, var_expr)
+	} else if !is_raw {
 		finalNixExpr, err = nb.NixReplGenerateExpr(var_expr)
 		if err != nil {
 			return err
 		}
 	}
 
+	// evaluate nix expression
+	stdout, err := nb.NixReplEvaluateExpr(ctx, finalNixExpr, is_strict)
+	if err != nil {
+		return err
+	}
+
+	// try to format the output as nix, if it fails then
+	// fallback to the original stdout
+	formattedStdout, err := nb.FormatNix(ctx, stdout)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to format nix output")
+		formattedStdout = stdout
+	}
+
+	// only turn into a markdown reply, if output contains newlines
+	if strings.Contains(formattedStdout, "\n") {
+		markdownRes := fmt.Sprintf("```nix\n%s\n```", formattedStdout)
+		return nb.SendMarkdownReply(ctx, client, evt, []byte(markdownRes))
+	}
+
+	return nb.SendTextReply(ctx, client, evt, []byte(formattedStdout))
+}
+
+func (nb *NixBot) NixReplEvaluateExpr(ctx context.Context, expr string, is_strict bool) (string, error) {
 	// setup cmd args
 	cmd_args := []string{
 		"-I", "nixpkgs=channel:nixos-unstable",
@@ -94,75 +143,32 @@ func (nb *NixBot) CommandHandlerRepl(ctx context.Context, client *mautrix.Client
 	}
 
 	// eval expr
-	cmd_args = append(cmd_args, []string{"--eval", "--expr", finalNixExpr}...)
+	cmd_args = append(cmd_args, []string{"--eval", "--expr", expr}...)
 
 	// setup command
 	cmd := exec.CommandContext(ctx,
 		"nix-instantiate", cmd_args...,
 	)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
+	stdout, err := cmd.Output()
 	if err != nil {
-		errRes := fmt.Sprintf("Error\n```\n%s\n```", stderr.String())
-		return nb.MakeMarkdownReply(ctx, client, evt, []byte(errRes))
+		return "", err
 	}
 
-	log.Error().Err(err).Msg("failed to format code")
-
-	stdoutString := strings.TrimSpace(stdout.String())
-	formattedStdout, err := nb.FormatNix(ctx, stdoutString)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to format nix output")
-
-		// fallback to default text
-		formattedStdout = stdoutString
-	}
-
-	if strings.Count(formattedStdout, "\n") > 0 {
-		markdownRes := fmt.Sprintf("```nix\n%s\n```", formattedStdout)
-		return nb.MakeMarkdownReply(ctx, client, evt, []byte(markdownRes))
-	}
-
-	return nb.MakeReply(ctx, client, evt, []byte(formattedStdout))
+	return strings.TrimSpace(string(stdout)), nil
 }
 
 func (nb *NixBot) NixReplGenerateExpr(expr string) (string, error) {
 	nb.ReplFileLock.RLock()
 	defer nb.ReplFileLock.RUnlock()
 
-	default_overrideable_nix_variables := map[string]string{
-		"_show": "x: if lib.isDerivation x then \"<derivation ${x.drvPath}>\" else x",
-	}
-
-	default_nix_variables := map[string]string{
-		"pkgs": "import <nixpkgs> {}",
-		"lib":  "pkgs.lib",
-	}
-
 	final_nix_variables := map[string]string{}
-
-	maps.Copy(final_nix_variables, default_overrideable_nix_variables)
+	maps.Copy(final_nix_variables, nix_repl_default_overrideable_nix_variables)
 	maps.Copy(final_nix_variables, nb.ReplVariables)
-	maps.Copy(final_nix_variables, default_nix_variables)
+	maps.Copy(final_nix_variables, nix_repl_default_nix_variables)
 
 	// because of @rasmus:rend.al, you know what you did
 	delete(final_nix_variables, "builtins")
-
-	tmplText := `
-let
-{{- range $k, $v := .Variables }}
-  {{ $k }} = {{ $v }};
-{{- end }}
-in _show ( {{ .Expr }} )
-`
-	tmpl, err := template.New("nixeval").Parse(tmplText)
-	if err != nil {
-		return "", err
-	}
 
 	type templateTmp struct {
 		Variables map[string]string
@@ -170,7 +176,7 @@ in _show ( {{ .Expr }} )
 	}
 
 	var buf bytes.Buffer
-	err = tmpl.Execute(&buf, templateTmp{Variables: final_nix_variables, Expr: expr})
+	err := tmplNixReplVariables.Execute(&buf, templateTmp{Variables: final_nix_variables, Expr: expr})
 	if err != nil {
 		return "", err
 	}
@@ -180,7 +186,6 @@ in _show ( {{ .Expr }} )
 }
 
 func (nb *NixBot) FormatNix(ctx context.Context, input string) (string, error) {
-	// setup cmd
 	cmd := exec.CommandContext(ctx, "nixfmt")
 
 	// setup stdin
@@ -188,62 +193,10 @@ func (nb *NixBot) FormatNix(ctx context.Context, input string) (string, error) {
 	stdin.Write([]byte(input))
 	cmd.Stdin = &stdin
 
-	// get stdout, stderr
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	stdout, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
-}
-
-// nix repl
-func (nb *NixBot) LoadNixReplFile() error {
-	nb.ReplFileLock.Lock()
-	defer nb.ReplFileLock.Unlock()
-
-	nb.ReplVariables = make(map[string]string)
-
-	f, err := os.Open(nb.ReplFilePath)
-	if err != nil {
-		return err
-	}
-
-	return json.NewDecoder(f).Decode(&nb.ReplVariables)
-}
-
-func (nb *NixBot) AddNixRepl(key, val string) error {
-	nb.ReplFileLock.Lock()
-	defer nb.ReplFileLock.Unlock()
-
-	// add to map
-	nb.ReplVariables[key] = val
-
-	// marshal
-	newFileBytes, err := json.Marshal(nb.ReplVariables)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(nb.ReplFilePath, newFileBytes, 0666)
-}
-
-func (nb *NixBot) RemoveNixRepl(key string) error {
-	nb.ReplFileLock.Lock()
-	defer nb.ReplFileLock.Unlock()
-
-	// delete from map
-	delete(nb.ReplVariables, key)
-
-	// marshal
-	newFileBytes, err := json.Marshal(nb.ReplVariables)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(nb.ReplFilePath, newFileBytes, 0666)
+	return strings.TrimSpace(string(stdout)), nil
 }

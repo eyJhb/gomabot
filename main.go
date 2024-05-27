@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -14,8 +13,6 @@ import (
 	"github.com/eyJhb/gomabot/nixbot"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
-	"maunium.net/go/mautrix"
-	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -39,7 +36,8 @@ type config struct {
 	Password string `yaml:"Password"`
 
 	// admins
-	Admins []string `yaml:"Admins"`
+	Admins     []string `yaml:"Admins"`
+	ReplAdmins []string `yaml:"ReplAdmins"`
 
 	StateDir string `yaml:"StateDir"`
 
@@ -106,21 +104,6 @@ func run(conf config) error {
 		Password: conf.Password,
 
 		Database: fmt.Sprintf("%s/%s", conf.StateDir, "mautrix-database.db"),
-
-		RoomjoinHandler: func(ctx context.Context, client *mautrix.Client, evt *event.Event) error {
-			var isAdmin bool
-			for _, admin := range conf.Admins {
-				if admin == evt.Sender.String() {
-					isAdmin = true
-				}
-			}
-
-			if isAdmin {
-				return nil
-			}
-
-			return errors.New("not admin")
-		},
 	}
 
 	bot, err := gobot.NewMatrixBot(ctx, botOpts)
@@ -128,9 +111,15 @@ func run(conf config) error {
 		return err
 	}
 
+	bot.HandlerSendErrors = true
+
 	nbot := nixbot.NixBot{
-		Bot:          &bot,
-		ReplFilePath: fmt.Sprintf("%s/nixrepl.json", conf.StateDir),
+		Bot:              &bot,
+		ReplFilePath:     fmt.Sprintf("%s/nixrepl.json", conf.StateDir),
+		MaxMessageLength: 10000,
+
+		InvitePrivileges:       conf.Admins,
+		ReplVariablePrivileges: append(conf.ReplAdmins, conf.Admins...),
 	}
 
 	nbot.Run(ctx)

@@ -9,13 +9,20 @@ import (
 	"text/template"
 
 	"github.com/hbollon/go-edlib"
-	"github.com/rs/zerolog/log"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 )
 
 const (
 	NixSearchPackagesLimit = 10
+)
+
+var (
+	tmplNixPackages = template.Must(template.New("packages").Parse(`
+{{- range $v := .}}
+- {{slice $v.Name 28}} ({{$v.Version}}) - [NixOS Search](https://search.nixos.org/packages?channel=unstable&query={{slice $v.Name 28}})
+{{- end -}}
+`))
 )
 
 type Package struct {
@@ -41,20 +48,19 @@ func (nb *NixBot) CommandHandlerSearchPackages(ctx context.Context, client *maut
 		search,
 	)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	stdout, err := cmd.Output()
 	if err != nil {
-		log.Error().Str("stdout", stdout.String()).Str("stderr", stderr.String()).Msg("failed to run command")
-		return nil
+		return err
 	}
 
 	packagesMap := make(map[string]Package)
-	err = json.Unmarshal(stdout.Bytes(), &packagesMap)
+	err = json.Unmarshal(stdout, &packagesMap)
 	if err != nil {
 		return err
+	}
+
+	if len(packagesMap) == 0 {
+		return nb.SendTextNoResults(ctx, client, evt)
 	}
 
 	// convert to slice
@@ -70,21 +76,15 @@ func (nb *NixBot) CommandHandlerSearchPackages(ctx context.Context, client *maut
 		return s1 < s2
 	})
 
-	tmplText := `
-{{- range $v := .}}
-- {{slice $v.Name 28}} ({{$v.Version}}) - [NixOS Search](https://search.nixos.org/packages?channel=unstable&query={{slice $v.Name 28}})
-{{- end -}}
-`
-	tmpl, err := template.New("nixpackages").Parse(tmplText)
-	if err != nil {
-		return err
+	if len(packages) > NixSearchPackagesLimit {
+		packages = packages[:NixSearchOptionsLimit]
 	}
 
 	var buf bytes.Buffer
-	err = tmpl.Execute(&buf, packages)
+	err = tmplNixPackages.Execute(&buf, packages)
 	if err != nil {
 		return err
 	}
 
-	return nb.MakeMarkdownReply(ctx, client, evt, buf.Bytes())
+	return nb.SendMarkdownReply(ctx, client, evt, buf.Bytes())
 }
