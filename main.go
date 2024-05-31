@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -11,13 +10,15 @@ import (
 	"os/signal"
 	"regexp"
 	"sort"
-	"strings"
 	"syscall"
 
 	"github.com/eyJhb/gomabot/gomabot"
 	gobot "github.com/eyJhb/gomabot/gomabot"
 	"github.com/rs/zerolog/log"
+	"github.com/yuin/goldmark"
 	"gopkg.in/yaml.v3"
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
 
@@ -158,20 +159,12 @@ func prepareScriptHandlers(scriptHandlers map[string]string) []gomabot.CommandHa
 }
 
 func HandlerScript(script string) gomabot.CommandHandlerFunc {
-	type scriptArgs struct {
-		SenderID string
-		RoomID   string
-		Message  string
-	}
+	return func(ctx context.Context, client *mautrix.Client, evt *event.Event) error {
+		senderId := evt.Sender
+		roomId := evt.RoomID
+		me := evt.Content.AsMessage()
 
-	return func(ctx context.Context, sender id.UserID, room id.RoomID, message string) (string, error) {
-		// marshal
-		jsonScriptArgs, err := json.Marshal(scriptArgs{SenderID: string(sender), RoomID: room.String(), Message: message})
-		if err != nil {
-			return "", err
-		}
-
-		cmd := exec.CommandContext(ctx, script, string(jsonScriptArgs))
+		cmd := exec.CommandContext(ctx, script)
 
 		// stderr
 		var outb, errb bytes.Buffer
@@ -180,29 +173,48 @@ func HandlerScript(script string) gomabot.CommandHandlerFunc {
 
 		// setup env
 		env := os.Environ()
-		env = append(env, fmt.Sprintf("USERID=%s", string(sender)))
-		env = append(env, fmt.Sprintf("ROOMID=%s", string(room)))
-		env = append(env, fmt.Sprintf("MESSAGE=%s", string(message)))
+		env = append(env, fmt.Sprintf("USERID=%s", string(senderId)))
+		env = append(env, fmt.Sprintf("ROOMID=%s", string(roomId)))
+		env = append(env, fmt.Sprintf("BODY=%s", string(me.Body)))
+		env = append(env, fmt.Sprintf("BODY_FORMATTED=%s", string(me.FormattedBody)))
 
-		message_split := strings.SplitN(message, " ", 2)
-
-		if len(message_split) > 1 {
-			env = append(env, fmt.Sprintf("MESSAGE_STRIP=%s", message_split[1]))
-		} else {
-			env = append(env, "MESSAGE_STRIP=")
+		// extract all extracted regex named groups, and add as envs
+		vars := gomabot.ExtractVars(ctx)
+		for k, v := range vars {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
 		}
 
 		cmd.Env = env
 
 		// execute command
-		err = cmd.Run()
+		err := cmd.Run()
 		if err != nil {
-			log.Error().Str("stdout", outb.String()).Str("stderr", errb.String()).Msg("failed to run command")
-			return "", err
+			err = sendMarkdownResponse(ctx, client, evt, fmt.Sprintf("Error:\n```\n%s\n```", errb.String()))
+			return err
 		}
 
-		return outb.String(), nil
+		return sendMarkdownResponse(ctx, client, evt, outb.String())
 	}
+}
+
+func sendMarkdownResponse(ctx context.Context, client *mautrix.Client, evt *event.Event, res string) error {
+	md := goldmark.New()
+
+	var mdOut bytes.Buffer
+	err := md.Convert([]byte(res), &mdOut)
+	if err != nil {
+		return fmt.Errorf("failed to convert response to markdown: %w", err)
+	}
+
+	_, err = client.SendMessageEvent(ctx, evt.RoomID, event.EventMessage, &event.MessageEventContent{
+		MsgType: event.MsgText,
+		Body:    res,
+
+		Format:        event.FormatHTML,
+		FormattedBody: mdOut.String(),
+	})
+
+	return err
 }
 
 func HandlerTest(sender id.UserID, room id.RoomID, message string) (string, error) {

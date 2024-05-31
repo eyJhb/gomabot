@@ -2,25 +2,42 @@ package gomabot
 
 import (
 	"context"
-	"fmt"
-	"html"
 	"regexp"
-	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
+)
+
+const (
+	ContextKey = "matrixbot-vars"
 )
 
 var (
 	reCodefence = regexp.MustCompile("(?m)^```([a-z]+)?\n([^`]+\n)^```")
 )
 
+func (mb *MatrixBot) AddEventHandler(pattern string, handlerFunc CommandHandlerFunc) {
+	mb.Handlers = append(mb.Handlers, CommandHandler{
+		Pattern: *regexp.MustCompile(pattern),
+		Handler: handlerFunc,
+	})
+}
+
+func (mb *MatrixBot) AddEventHandlerFormattedBody(pattern string, handlerFunc CommandHandlerFunc) {
+	mb.Handlers = append(mb.Handlers, CommandHandler{
+		Pattern:            *regexp.MustCompile(pattern),
+		Handler:            handlerFunc,
+		MatchFormattedBody: true,
+	})
+}
+
 func (mb *MatrixBot) OnEventStateMember(ctx context.Context, evt *event.Event) {
 	if evt.GetStateKey() == mb.Client.UserID.String() && evt.Content.AsMember().Membership == event.MembershipInvite {
 		var err error
 		if mb.RoomjoinHandler != nil {
-			_, err = mb.RoomjoinHandler(ctx, evt.Sender, evt.RoomID, "")
+			err = mb.RoomjoinHandler(ctx, mb.Client, evt)
 		}
 
 		log.Info().
@@ -48,6 +65,12 @@ func (mb *MatrixBot) OnEventStateMember(ctx context.Context, evt *event.Event) {
 }
 
 func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
+	// ignore own messages
+	if mb.Client.UserID == evt.Sender {
+		return
+	}
+
+	// log messages
 	log.Info().
 		Str("sender", evt.Sender.String()).
 		Str("type", evt.Type.String()).
@@ -55,93 +78,70 @@ func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
 		Str("body", evt.Content.AsMessage().Body).
 		Msg("Received message")
 
-	// ignore own messages
-	if mb.Client.UserID == evt.Sender {
+	// ignore messages older than 1 minute
+	if time.Now().Sub(time.Unix(evt.Timestamp, 0)) > time.Minute {
 		return
 	}
 
 	for _, handler := range mb.Handlers {
-		messageEventContent := evt.Content.AsMessage()
+		me := evt.Content.AsMessage()
 
-		msg := messageEventContent.Body
-		if len(messageEventContent.FormattedBody) > 0 {
-			msg = messageEventContent.FormattedBody
-
+		body := me.Body
+		if handler.MatchFormattedBody {
+			if handler.Pattern.MatchString(me.FormattedBody) {
+				body = me.FormattedBody
+			}
 		}
 
-		msg = strings.TrimSpace(msg)
-		if !handler.Pattern.MatchString(msg) {
+		if !handler.Pattern.MatchString(body) {
 			continue
 		}
+
+		// extract potential groupnames
+		reGroupNames := handler.Pattern.SubexpNames()
+		vars := make(map[string]string)
+		if len(reGroupNames) > 0 {
+			for _, match := range handler.Pattern.FindAllStringSubmatch(body, -1) {
+				for groupIdx, group := range match {
+					name := reGroupNames[groupIdx]
+					if name == "" {
+						continue
+					}
+
+					vars[name] = group
+				}
+			}
+		}
+
+		ctx = context.WithValue(ctx, ContextKey, vars)
 
 		// mark as read if it matches a handler
 		err := mb.Client.MarkRead(ctx, evt.RoomID, evt.ID)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to mark message as read")
-
 		}
 
-		go func(ctx context.Context, senderID id.UserID, roomID id.RoomID, msg string) {
-			handlerMsg, err := handler.Handler(ctx, senderID, roomID, msg)
+		go func(ctx context.Context, client *mautrix.Client, evt *event.Event) {
+			err := handler.Handler(ctx, client, evt)
 			if err != nil {
-				handlerMsg = "unknown error occured executing command"
 				log.Error().Err(err).Msg("failed to call command handler")
-			}
 
-			err = mb.sendMessage(ctx, senderID, roomID, handlerMsg)
-			if err != nil {
-				log.Error().Err(err).Msg("failed to send message")
-				return
+				if mb.HandlerSendErrors {
+					_, err = mb.Client.SendText(ctx, evt.RoomID, err.Error())
+					log.Error().Err(err).Msg("failed to send error to channel")
+				}
 			}
-		}(ctx, evt.Sender, evt.RoomID, msg)
+		}(ctx, mb.Client, evt)
 
 		break
 	}
 }
 
-func (mb *MatrixBot) sendMessage(ctx context.Context, senderID id.UserID, roomID id.RoomID, msg string) error {
-	_ = senderID
-
-	var isHTMLMessage bool
-	htmlMsg := msg
-	if strings.Contains(msg, "```") {
-		isHTMLMessage = true
-
-		// convert codeblocks to HTML
-		matchIndexes := reCodefence.FindAllStringSubmatchIndex(htmlMsg, -1)
-
-		for i := len(matchIndexes) - 1; i >= 0; i-- {
-			idxs := matchIndexes[i]
-
-			textBefore := htmlMsg[:idxs[0]]
-			textAfter := htmlMsg[idxs[1]:]
-			codeblock := strings.ReplaceAll(html.EscapeString(htmlMsg[idxs[4]:idxs[5]]), "\n", "||NEWLINE||")
-
-			var codeClass string
-			if idxs[2] != -1 {
-				codeClass = fmt.Sprintf(` class="language-%s"`, htmlMsg[idxs[2]:idxs[3]])
-			}
-
-			htmlMsg = fmt.Sprintf("%s<pre><code%s>%s</code></pre>%s", textBefore, codeClass, codeblock, textAfter)
-		}
-
+func ExtractVars(ctx context.Context) map[string]string {
+	v := ctx.Value(ContextKey)
+	if mapv, ok := v.(map[string]string); ok {
+		return mapv
 	}
 
-	msgEventContent := event.MessageEventContent{
-		MsgType: event.MsgText,
-		Body:    msg,
-	}
-
-	// indicate it's formatted as HTML
-	if isHTMLMessage {
-		msgEventContent.Format = event.FormatHTML
-		msgEventContent.FormattedBody = strings.ReplaceAll(
-			strings.ReplaceAll(htmlMsg, "\n", "<br/>"),
-			"||NEWLINE||",
-			"\n",
-		)
-	}
-
-	_, err := mb.Client.SendMessageEvent(ctx, roomID, event.EventMessage, &msgEventContent)
-	return err
+	return make(map[string]string)
 }

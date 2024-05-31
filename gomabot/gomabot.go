@@ -16,18 +16,21 @@ import (
 type MatrixBot struct {
 	Client *mautrix.Client
 
-	Handlers        []CommandHandler
-	RoomjoinHandler CommandHandlerFunc
+	Handlers          []CommandHandler
+	HandlerSendErrors bool
+	RoomjoinHandler   CommandHandlerFunc
 
 	cryptoHelper  *cryptohelper.CryptoHelper
 	waitGroup     *sync.WaitGroup
 	ctxCancelFunc context.CancelFunc
 }
 
-type CommandHandlerFunc func(ctx context.Context, sender id.UserID, room id.RoomID, message string) (string, error)
+type CommandHandlerFunc func(ctx context.Context, client *mautrix.Client, evt *event.Event) error
 
 type CommandHandler struct {
 	Pattern regexp.Regexp
+
+	MatchFormattedBody bool
 
 	Handler CommandHandlerFunc
 }
