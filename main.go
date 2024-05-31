@@ -12,8 +12,7 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/eyjhb/gomabot/gomabot"
-	gobot "github.com/eyjhb/gomabot/gomabot"
+	"github.com/eyJhb/gomabot/gomabot"
 	"github.com/rs/zerolog/log"
 	"github.com/yuin/goldmark"
 	"gopkg.in/yaml.v3"
@@ -92,7 +91,7 @@ func main() {
 func run(conf config) error {
 	ctx := context.Background()
 
-	botOpts := gobot.MatrixBotOpts{
+	botOpts := gomabot.MatrixBotOpts{
 		Homeserver: conf.Homeserver,
 		PickleKey:  []byte(conf.PickleKey),
 
@@ -111,7 +110,7 @@ func run(conf config) error {
 		botOpts.RoomjoinHandler = HandlerScript(conf.ScriptJoinHandler)
 	}
 
-	bot, err := gobot.NewMatrixBot(ctx, botOpts)
+	bot, err := gomabot.NewMatrixBot(ctx, botOpts)
 	if err != nil {
 		return err
 	}
@@ -148,7 +147,7 @@ func prepareScriptHandlers(scriptHandlers map[string]string) []gomabot.CommandHa
 	for _, scriptPattern := range scriptPatterns {
 		scriptPath := scriptHandlers[scriptPattern]
 
-		handlers = append(handlers, gobot.CommandHandler{
+		handlers = append(handlers, gomabot.CommandHandler{
 			Pattern: *regexp.MustCompile(scriptPattern),
 			Handler: HandlerScript(scriptPath),
 		})

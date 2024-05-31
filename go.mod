@@ -1,4 +1,4 @@
-module github.com/eyjhb/gomabot
+module github.com/eyJhb/gomabot
 
 go 1.22.2
 
