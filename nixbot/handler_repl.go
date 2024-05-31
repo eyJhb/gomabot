@@ -46,7 +46,6 @@ func (nb *NixBot) CommandHandlerReplSimple(ctx context.Context, client *mautrix.
 	expr := var_key
 	if var_user != "" {
 		expr = fmt.Sprintf("%s ''[%s](https://matrix.to/#/%s)''", var_key, var_user, var_user)
-
 	}
 
 	finalNixExpr, err := nb.NixReplGenerateExpr(expr)
@@ -62,6 +61,8 @@ func (nb *NixBot) CommandHandlerReplSimple(ctx context.Context, client *mautrix.
 	if len(stdout) > 2 && stdout[0] == '"' && stdout[len(stdout)-1] == '"' {
 		stdout = stdout[1 : len(stdout)-1]
 	}
+
+	stdout = strings.ReplaceAll(stdout, "\\n", "\n")
 
 	return nb.SendMarkdownReply(ctx, client, evt, []byte(stdout))
 }
