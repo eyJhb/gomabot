@@ -12,8 +12,8 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/eyJhb/gomabot/gomabot"
-	gobot "github.com/eyJhb/gomabot/gomabot"
+	"github.com/eyjhb/gomabot/gomabot"
+	gobot "github.com/eyjhb/gomabot/gomabot"
 	"github.com/rs/zerolog/log"
 	"github.com/yuin/goldmark"
 	"gopkg.in/yaml.v3"
