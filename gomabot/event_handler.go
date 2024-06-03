@@ -3,6 +3,7 @@ package gomabot
 import (
 	"context"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -108,7 +109,7 @@ func (mb *MatrixBot) OnEventMessage(ctx context.Context, evt *event.Event) {
 						continue
 					}
 
-					vars[name] = group
+					vars[name] = strings.TrimSpace(group)
 				}
 			}
 		}
